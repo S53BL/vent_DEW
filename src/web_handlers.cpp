@@ -5,6 +5,11 @@
 #include <SD_MMC.h>
 #include <vector>
 #include <algorithm>
+#include <esp_system.h>
+#include <esp_heap_caps.h>
+#include <esp_timer.h>
+#include <esp_clk.h>
+#include <freertos/task.h>
 
 // HTML template definitions
 const char* HTML_ROOT = R"rawliteral(
@@ -130,8 +135,189 @@ const char* HTML_SD_LIST = R"rawliteral(
 </body>
 </html>)rawliteral";
 
+// Helper function to format bytes to human readable format
+String formatBytes(size_t bytes) {
+    if (bytes < 1024) return String(bytes) + " B";
+    else if (bytes < 1024 * 1024) return String(bytes / 1024.0, 1) + " KB";
+    else return String(bytes / (1024.0 * 1024.0), 1) + " MB";
+}
+
+// Helper function to get SD card type string
+String getCardTypeString(uint8_t cardType) {
+    switch (cardType) {
+        case CARD_NONE: return "Ni kartice";
+        case CARD_MMC: return "MMC";
+        case CARD_SD: return "SD";
+        case CARD_SDHC: return "SDHC";
+        case CARD_UNKNOWN: return "Neznano";
+        default: return "Neznano";
+    }
+}
+
 void handleRoot(AsyncWebServerRequest *request) {
-    request->send(200, "text/html", HTML_ROOT);
+    Serial.printf("WEB: %s %s\n", request->methodToString(), request->url().c_str());
+
+    String html = R"rawliteral(
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+    <meta charset="UTF-8">
+    <title>DEW - Ventilacijska enota</title>
+    <style>
+        body {
+            background: #101010;
+            color: #e0e0e0;
+            font-family: sans-serif;
+            margin: 20px;
+        }
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .content {
+            max-width: 1000px;
+            margin: 0 auto 40px auto;
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            margin-bottom: 20px;
+        }
+        th, td {
+            padding: 10px 12px;
+            text-align: left;
+            border: 1px solid #333;
+        }
+        th {
+            background: #2a2a2a;
+            color: white;
+            font-weight: bold;
+            width: 30%;
+        }
+        .section-title {
+            color: #4da6ff;
+            font-size: 18px;
+            margin: 20px 0 10px 0;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #4da6ff;
+        }
+        .nav {
+            text-align: center;
+            margin-top: 30px;
+        }
+        .nav a {
+            color: #4da6ff;
+            text-decoration: none;
+            padding: 15px 30px;
+            border: 2px solid #4da6ff;
+            border-radius: 8px;
+            font-size: 18px;
+            display: inline-block;
+        }
+        .nav a:hover {
+            background: #4da6ff;
+            color: #101010;
+        }
+    </style>
+</head>
+<body>
+    <h1>DEW - Sistemska diagnostika</h1>
+    <div class="content">
+)rawliteral";
+
+    // RAM / Heap section
+    html += "<div class='section-title'>RAM / Heap pomnilnik</div>";
+    html += "<table>";
+    html += "<tr><th>Prosti heap</th><td>" + formatBytes(esp_get_free_heap_size()) + "</td></tr>";
+    html += "<tr><th>Prosti interni heap</th><td>" + formatBytes(esp_get_free_internal_heap_size()) + "</td></tr>";
+    html += "<tr><th>Najmanjša prosta vrednost</th><td>" + formatBytes(esp_get_minimum_free_heap_size()) + "</td></tr>";
+    html += "<tr><th>8-bit heap</th><td>" + formatBytes(heap_caps_get_free_size(MALLOC_CAP_8BIT)) + "</td></tr>";
+    html += "<tr><th>PSRAM heap</th><td>" + formatBytes(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)) + "</td></tr>";
+    html += "</table>";
+
+    // Flash memory section
+    html += "<div class='section-title'>Flash pomnilnik</div>";
+    html += "<table>";
+    html += "<tr><th>Velikost flash čipa</th><td>" + formatBytes(ESP.getFlashChipSize()) + "</td></tr>";
+    html += "<tr><th>Velikost programa</th><td>" + formatBytes(ESP.getSketchSize()) + "</td></tr>";
+    html += "<tr><th>Prostor za OTA</th><td>" + formatBytes(ESP.getFreeSketchSpace()) + "</td></tr>";
+    html += "<tr><th>Hitrost flash čipa</th><td>" + String(ESP.getFlashChipSpeed() / 1000000.0, 1) + " MHz</td></tr>";
+    html += "</table>";
+
+    // SD card section
+    html += "<div class='section-title'>SD kartica</div>";
+    html += "<table>";
+    if (SD_MMC.cardSize() > 0) {
+        html += "<tr><th>Skupna velikost</th><td>" + formatBytes(SD_MMC.cardSize()) + "</td></tr>";
+        html += "<tr><th>Uporabna velikost</th><td>" + formatBytes(SD_MMC.totalBytes()) + "</td></tr>";
+        html += "<tr><th>Zasedena velikost</th><td>" + formatBytes(SD_MMC.usedBytes()) + "</td></tr>";
+        html += "<tr><th>Tip kartice</th><td>" + getCardTypeString(SD_MMC.cardType()) + "</td></tr>";
+    } else {
+        html += "<tr><td colspan='2' style='text-align: center; color: #ff4444;'>SD kartica ni inicializirana</td></tr>";
+    }
+    html += "</table>";
+
+    // PSRAM section
+    html += "<div class='section-title'>PSRAM</div>";
+    html += "<table>";
+    size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    if (psram_free > 0) {
+        html += "<tr><th>Prosta PSRAM</th><td>" + formatBytes(psram_free) + "</td></tr>";
+        // Try to estimate total PSRAM size
+        size_t psram_total = psram_free + heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+        html += "<tr><th>Skupna PSRAM (ocena)</th><td>" + formatBytes(psram_total) + "</td></tr>";
+    } else {
+        html += "<tr><td colspan='2' style='text-align: center; color: #888;'>PSRAM ni na voljo</td></tr>";
+    }
+    html += "</table>";
+
+    // Time / Uptime section
+    html += "<div class='section-title'>Čas / Uptime</div>";
+    html += "<table>";
+    html += "<tr><th>Uptime (millis)</th><td>" + String(millis()) + " ms</td></tr>";
+    html += "<tr><th>Uptime (esp_timer)</th><td>" + String(esp_timer_get_time() / 1000) + " ms</td></tr>";
+    html += "<tr><th>Uptime sekund</th><td>" + String(millis() / 1000) + " s</td></tr>";
+    html += "</table>";
+
+    // WiFi section
+    html += "<div class='section-title'>WiFi</div>";
+    html += "<table>";
+    if (WiFi.status() == WL_CONNECTED) {
+        html += "<tr><th>Signal (RSSI)</th><td>" + String(WiFi.RSSI()) + " dBm</td></tr>";
+        html += "<tr><th>SSID</th><td>" + WiFi.SSID() + "</td></tr>";
+        html += "<tr><th>IP naslov</th><td>" + WiFi.localIP().toString() + "</td></tr>";
+    } else {
+        html += "<tr><td colspan='2' style='text-align: center; color: #ff4444;'>WiFi ni povezan</td></tr>";
+    }
+    html += "</table>";
+
+    // CPU section
+    html += "<div class='section-title'>CPU</div>";
+    html += "<table>";
+    html += "<tr><th>CPU frekvenca</th><td>" + String(esp_clk_cpu_freq() / 1000000.0, 1) + " MHz</td></tr>";
+    html += "</table>";
+
+    // Stack usage section
+    html += "<div class='section-title'>Stack usage</div>";
+    html += "<table>";
+    html += "<tr><th>Stack high water mark</th><td>" + String(uxTaskGetStackHighWaterMark(NULL)) + " besed</td></tr>";
+    html += "</table>";
+
+    // Close content and add navigation
+    html += "</div>";
+    html += "<div class='nav'>";
+    html += "<a href='/sd-list'>SD datoteke</a>";
+    html += "</div>";
+    html += "</body></html>";
+
+    request->send(200, "text/html", html);
 }
 
 struct FileInfo {
