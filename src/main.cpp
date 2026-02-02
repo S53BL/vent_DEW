@@ -8,6 +8,7 @@
 #include "disp.h"
 #include "globals.h"
 #include "sd.h"
+#include "web.h"
 #include <lvgl.h>
 
 // HTTP Server
@@ -139,6 +140,9 @@ bool setupServer() {
     server.on("/api/ping", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(200, "text/plain", "pong");
     });
+
+    // Setup web interface endpoints
+    setupWebEndpoints();
 
     Serial.println("HTTP:Starting server");
     server.begin();
