@@ -3,36 +3,25 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <ezTime.h>
 #include "wifi_config.h"
 #include "disp.h"
+#include "globals.h"
+#include "sd.h"
 #include <lvgl.h>
-
-// DEW data structure
-struct DEWData {
-    String room = "";
-    uint8_t fan = 0;
-    uint32_t countdown = 0;
-    float temp = 0.0f;
-    float humidity = 0.0f;
-    float pressure = 0.0f;
-    uint8_t error = 0;
-    uint32_t lastUpdate = 0;
-};
-
-DEWData dewData;
 
 // HTTP Server
 AsyncWebServer server(80);
-
-// WiFi variables
-String wifiSSID = "";
-bool connection_ok = false;
-bool wifi_error = false;
 
 // WiFi constants
 #define WIFI_CHECK_INTERVAL 30000  // 30 seconds
 #define WIFI_RETRY_COUNT 3
 #define WIFI_FIXED_DELAY 5000  // 5 seconds
+
+// Extern declarations for global variables
+extern String wifiSSID;
+extern bool connection_ok;
+extern bool wifi_error;
 
 bool setupWiFi() {
     Serial.println("WiFi:Configuring static IP...");
@@ -70,6 +59,46 @@ bool setupWiFi() {
     return false;
 }
 
+void setupNTP() {
+    myTZ.setPosix(TZ_STRING);
+    events();
+    setInterval(NTP_UPDATE_INTERVAL / 1000);
+    Serial.println("NTP: Timezone set to CET/CEST");
+}
+
+bool syncNTP() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("NTP: WiFi not connected - cannot sync");
+        timeSynced = false;
+        return false;
+    }
+
+    Serial.println("NTP: Starting NTP sync with servers:");
+    for (int i = 0; i < NTP_SERVER_COUNT; i++) {
+        Serial.printf("NTP: Trying server %d: %s\n", i+1, ntpServers[i]);
+
+        setServer(ntpServers[i]);
+        updateNTP();
+        delay(2000); // Wait for NTP response
+
+        // Check if time is now valid (ezTime sets time after successful sync)
+        if (myTZ.now() > 1609459200) { // Check if time is after 2021-01-01 (reasonable check)
+            Serial.printf("NTP: SUCCESS with %s\n", ntpServers[i]);
+            Serial.printf("NTP: Current time: %s\n", myTZ.dateTime().c_str());
+            timeSynced = true;
+            return true;
+        } else {
+            Serial.printf("NTP: FAILED with %s (invalid time)\n", ntpServers[i]);
+        }
+
+        delay(1000); // Small delay between attempts
+    }
+
+    Serial.println("NTP: All servers failed - time not synchronized");
+    timeSynced = false;
+    return false;
+}
+
 bool setupServer() {
     Serial.println("HTTP:Setting up server endpoints");
 
@@ -100,6 +129,9 @@ bool setupServer() {
                       dewData.room.c_str(), dewData.fan, dewData.countdown,
                       dewData.temp, dewData.humidity, dewData.pressure, dewData.error);
 
+        // Save data to SD card
+        saveDEWData();
+
         request->send(200, "application/json", "{\"status\":\"OK\"}");
     });
 
@@ -119,8 +151,8 @@ void setup() {
 
   // Wait 3 seconds to allow user to see serial output
   Serial.println("\n\n=== ESP32-S3 LVGL vent_DEW ===");
-  Serial.println("Waiting 3 seconds for serial monitor...");
-  delay(3000);
+  Serial.println("Waiting 10 seconds for serial monitor...");
+  delay(9999);
   Serial.println("Starting setup...");
 
   // Initialize display with LVGL
@@ -128,13 +160,25 @@ void setup() {
   initDisplay();
   Serial.println("Display initialized");
 
+  // Initialize SD card
+  Serial.println("Initializing SD card...");
+  if (!initSD()) {
+    Serial.println("SD card initialization failed - continuing without SD logging");
+  } else {
+    Serial.println("SD card initialized successfully");
+  }
+
   // Setup WiFi
   Serial.println("Setting up WiFi...");
   bool wifiConnected = setupWiFi();
   Serial.println("WiFi setup complete");
 
-  // Setup HTTP server
   if (wifiConnected) {
+    Serial.println("Setting up NTP...");
+    setupNTP();
+    syncNTP();  // Try to sync NTP on startup
+    Serial.println("NTP setup complete");
+
     Serial.println("Setting up HTTP server...");
     if (!setupServer()) {
       Serial.println("HTTP server setup failed");
@@ -184,7 +228,27 @@ void loop() {
       }
   }
 
-  // Handle LVGL tasks
-  lv_timer_handler();
+  // NTP update logic - retry if not synced or periodic update
+  static unsigned long lastNTPUpdate = 0;
+  if (WiFi.status() == WL_CONNECTED &&
+      (!timeSynced || now - lastNTPUpdate > NTP_UPDATE_INTERVAL)) {
+      lastNTPUpdate = now;
+      syncNTP();
+  }
+
+  // Ensure lv_timer_handler every 5ms (like in vent_REW)
+  static uint32_t lastLvgl = 0;
+  if (now - lastLvgl >= 5) {
+      lv_timer_handler();
+      lastLvgl = now;
+  }
+
+  // Update time display every second
+  static unsigned long lastTimeUpdate = 0;
+  if (now - lastTimeUpdate >= 1000) {
+      updateTimeDisplay();
+      lastTimeUpdate = now;
+  }
+
   delay(1);
 }

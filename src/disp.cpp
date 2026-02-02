@@ -1,12 +1,19 @@
 // disp.cpp - Display implementation for vent_DEW LVGL version
 #include "disp.h"
 #include <lvgl.h>
+#include <ezTime.h>
+#include <WiFi.h>
+
+// Extern declarations
+extern Timezone myTZ;
+extern bool timeSynced;
 
 // LVGL objects
 static lv_obj_t* kop_btn;
 static lv_obj_t* kop_label1;
 static lv_obj_t* kop_label2;
 static lv_obj_t* kop_label3;
+static lv_obj_t* kop_label4;
 
 // LVGL display buffer and driver
 static const uint16_t screenWidth = 240;
@@ -123,9 +130,61 @@ void createKOPButton() {
     lv_label_set_text(kop_label3, "00.0%");
     lv_obj_set_style_text_font(kop_label3, &lv_font_montserrat_20, 0);
     lv_obj_align(kop_label3, LV_ALIGN_TOP_LEFT, 15, 100);
+
+    // Time label - same font as KOP
+    kop_label4 = lv_label_create(kop_btn);
+    lv_label_set_text(kop_label4, "00:00:00");
+    lv_obj_set_style_text_font(kop_label4, &lv_font_montserrat_28, 0);
+    lv_obj_align(kop_label4, LV_ALIGN_TOP_LEFT, 15, 130);
 }
 
 void drawKOPButton() {
     // LVGL handles drawing, just update labels if needed
     // This function kept for compatibility
+}
+
+void updateTimeDisplay() {
+    Serial.printf("TIME: updateTimeDisplay called, timeSynced=%d, kop_label4=%p\n", timeSynced, kop_label4);
+
+    if (kop_label4 == NULL) {
+        Serial.println("TIME: ERROR - kop_label4 is NULL!");
+        return;
+    }
+
+    // Update time label with current time or error message
+    if (timeSynced) {
+        // Debug: Check if time is actually available
+        time_t currentTime = myTZ.now();
+        Serial.printf("TIME: myTZ.now() = %ld\n", currentTime);
+
+        if (currentTime < 1609459200) { // Before 2021-01-01
+            Serial.println("TIME: ERROR - Time appears invalid!");
+            lv_label_set_text(kop_label4, "TIME ERR");
+            return;
+        }
+
+        // Show current time in hh:mm:ss format
+        int hour = myTZ.dateTime("H").toInt();
+        int minute = myTZ.dateTime("i").toInt();
+        int second = myTZ.dateTime("s").toInt();
+
+        char timeStr[9];
+        sprintf(timeStr, "%02d:%02d:%02d", hour, minute, second);
+
+        Serial.printf("TIME: Setting label text to: %s (H=%d, i=%d, s=%d)\n", timeStr, hour, minute, second);
+        lv_label_set_text(kop_label4, timeStr);
+
+        // Verify the text was set
+        const char* currentText = lv_label_get_text(kop_label4);
+        Serial.printf("TIME: Label text after setting: '%s'\n", currentText);
+    } else {
+        // Show error message
+        if (WiFi.status() != WL_CONNECTED) {
+            lv_label_set_text(kop_label4, "WiFi ERR");
+            Serial.println("TIME: Display error - WiFi not connected");
+        } else {
+            lv_label_set_text(kop_label4, "NTP ERR");
+            Serial.println("TIME: Display error - NTP not synchronized");
+        }
+    }
 }

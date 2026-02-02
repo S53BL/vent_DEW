@@ -51,4 +51,14 @@
 #define FONT_24 4  // tft.setTextFont(4) - 26x32
 #define FONT_28 6  // tft.setTextFont(6) - 48x64
 
+// NTP constants
+#define NTP_UPDATE_INTERVAL 1800000  // 30 minutes
+#define NTP_SERVER_COUNT 3
+
+// NTP servers
+extern const char* ntpServers[];
+
+// Timezone string for Central European Time with DST
+#define TZ_STRING "CET-1CEST,M3.5.0,M10.5.0/3"
+
 #endif // CONFIG_H

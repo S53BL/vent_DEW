@@ -10,5 +10,6 @@ extern TFT_eSPI tft;
 void initDisplay();
 void drawKOPButton();
 void createKOPButton();
+void updateTimeDisplay();
 
 #endif // DISP_H
