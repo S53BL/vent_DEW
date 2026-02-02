@@ -1,8 +1,28 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
 #include "wifi_config.h"
 #include "disp.h"
 #include <lvgl.h>
+
+// DEW data structure
+struct DEWData {
+    String room = "";
+    uint8_t fan = 0;
+    uint32_t countdown = 0;
+    float temp = 0.0f;
+    float humidity = 0.0f;
+    float pressure = 0.0f;
+    uint8_t error = 0;
+    uint32_t lastUpdate = 0;
+};
+
+DEWData dewData;
+
+// HTTP Server
+AsyncWebServer server(80);
 
 // WiFi variables
 String wifiSSID = "";
@@ -50,18 +70,83 @@ bool setupWiFi() {
     return false;
 }
 
+bool setupServer() {
+    Serial.println("HTTP:Setting up server endpoints");
+
+    // DEW update endpoint - receives data from CEW
+    server.on("/api/dew-update", HTTP_POST, [](AsyncWebServerRequest *request){
+        String body = request->arg("plain");
+        Serial.println("HTTP:Received /api/dew-update body: " + body);
+
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            Serial.println("HTTP:JSON parse error: " + String(error.c_str()));
+            request->send(400, "application/json", "{\"status\":\"ERROR\",\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        // Parse DEW data
+        dewData.room = doc["room"] | "";
+        dewData.fan = doc["fan"] | 0;
+        dewData.countdown = doc["countdown"] | 0;
+        dewData.temp = doc["temp"] | 0.0f;
+        dewData.humidity = doc["humidity"] | 0.0f;
+        dewData.pressure = doc["pressure"] | 0.0f;  // Optional for KOP
+        dewData.error = doc["error"] | 0;
+        dewData.lastUpdate = millis();
+
+        Serial.printf("HTTP:Parsed DEW data - room:%s fan:%d countdown:%d temp:%.1f hum:%.1f pres:%.1f err:%d\n",
+                      dewData.room.c_str(), dewData.fan, dewData.countdown,
+                      dewData.temp, dewData.humidity, dewData.pressure, dewData.error);
+
+        request->send(200, "application/json", "{\"status\":\"OK\"}");
+    });
+
+    // Heartbeat endpoint
+    server.on("/api/ping", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "text/plain", "pong");
+    });
+
+    Serial.println("HTTP:Starting server");
+    server.begin();
+    Serial.println("HTTP:Server started on port 80");
+    return true;
+}
+
 void setup() {
   Serial.begin(115200);
-  delay(1000);
-  Serial.println("ESP32-S3 LVGL vent_DEW");
+
+  // Wait 3 seconds to allow user to see serial output
+  Serial.println("\n\n=== ESP32-S3 LVGL vent_DEW ===");
+  Serial.println("Waiting 3 seconds for serial monitor...");
+  delay(3000);
+  Serial.println("Starting setup...");
 
   // Initialize display with LVGL
+  Serial.println("Initializing display...");
   initDisplay();
+  Serial.println("Display initialized");
 
   // Setup WiFi
   Serial.println("Setting up WiFi...");
   bool wifiConnected = setupWiFi();
   Serial.println("WiFi setup complete");
+
+  // Setup HTTP server
+  if (wifiConnected) {
+    Serial.println("Setting up HTTP server...");
+    if (!setupServer()) {
+      Serial.println("HTTP server setup failed");
+    } else {
+      Serial.println("HTTP server initialized");
+      Serial.println("Ready to receive data from CEW");
+    }
+  } else {
+    Serial.println("HTTP server not started - WiFi not connected");
+  }
+
+  Serial.println("Setup complete - entering main loop");
 }
 
 void loop() {
