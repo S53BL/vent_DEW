@@ -148,11 +148,10 @@ bool setupServer() {
 
 void setup() {
   Serial.begin(115200);
+  // 5-second delay after Serial.begin() to allow serial monitor to connect
+  delay(5000);
 
-  // Wait 3 seconds to allow user to see serial output
   Serial.println("\n\n=== ESP32-S3 LVGL vent_DEW ===");
-  Serial.println("Waiting 10 seconds for serial monitor...");
-  delay(9999);
   Serial.println("Starting setup...");
 
   // Initialize display with LVGL
@@ -196,14 +195,14 @@ void setup() {
 void loop() {
   uint32_t now = millis();
 
-  // Periodic status output every 3 seconds
+  // Periodic status output every 10 seconds
   static unsigned long lastStatusOutput = 0;
-  if (now - lastStatusOutput > 3000) {
+  if (now - lastStatusOutput > 10000) {
       lastStatusOutput = now;
-      Serial.printf("Status - millis: %lu, heap: %d, WiFi: %s\n",
-                    now,
-                    ESP.getFreeHeap(),
-                    WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED");
+      Serial.printf("myTZ %ld %s heap: %d\n",
+                    myTZ.now(),
+                    myTZ.dateTime("H:i:s").c_str(),
+                    ESP.getFreeHeap());
   }
 
   // WiFi reconnect logic

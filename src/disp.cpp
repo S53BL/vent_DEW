@@ -77,6 +77,7 @@ void initDisplay() {
     disp_drv.ver_res = screenHeight;
     disp_drv.flush_cb = my_disp_flush;
     disp_drv.draw_buf = &draw_buf;
+    disp_drv.full_refresh = 1;  // Force full screen redraw like in vent_REW
     lv_disp_drv_register(&disp_drv);
 
     // Set background color
@@ -144,25 +145,8 @@ void drawKOPButton() {
 }
 
 void updateTimeDisplay() {
-    Serial.printf("TIME: updateTimeDisplay called, timeSynced=%d, kop_label4=%p\n", timeSynced, kop_label4);
-
-    if (kop_label4 == NULL) {
-        Serial.println("TIME: ERROR - kop_label4 is NULL!");
-        return;
-    }
-
     // Update time label with current time or error message
     if (timeSynced) {
-        // Debug: Check if time is actually available
-        time_t currentTime = myTZ.now();
-        Serial.printf("TIME: myTZ.now() = %ld\n", currentTime);
-
-        if (currentTime < 1609459200) { // Before 2021-01-01
-            Serial.println("TIME: ERROR - Time appears invalid!");
-            lv_label_set_text(kop_label4, "TIME ERR");
-            return;
-        }
-
         // Show current time in hh:mm:ss format
         int hour = myTZ.dateTime("H").toInt();
         int minute = myTZ.dateTime("i").toInt();
@@ -171,20 +155,16 @@ void updateTimeDisplay() {
         char timeStr[9];
         sprintf(timeStr, "%02d:%02d:%02d", hour, minute, second);
 
-        Serial.printf("TIME: Setting label text to: %s (H=%d, i=%d, s=%d)\n", timeStr, hour, minute, second);
         lv_label_set_text(kop_label4, timeStr);
 
-        // Verify the text was set
-        const char* currentText = lv_label_get_text(kop_label4);
-        Serial.printf("TIME: Label text after setting: '%s'\n", currentText);
+        // Force display refresh
+        lv_refr_now(NULL);
     } else {
         // Show error message
         if (WiFi.status() != WL_CONNECTED) {
             lv_label_set_text(kop_label4, "WiFi ERR");
-            Serial.println("TIME: Display error - WiFi not connected");
         } else {
             lv_label_set_text(kop_label4, "NTP ERR");
-            Serial.println("TIME: Display error - NTP not synchronized");
         }
     }
 }
